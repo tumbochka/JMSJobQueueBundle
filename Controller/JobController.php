@@ -3,69 +3,69 @@
 namespace JMS\JobQueueBundle\Controller;
 
 use Doctrine\Common\Util\ClassUtils;
-use JMS\DiExtraBundle\Annotation as DI;
-use RentJeeves\DataBundle\Entity\Job;
-use Pagerfanta\Adapter\DoctrineORMAdapter;
-use Pagerfanta\Pagerfanta;
-use Pagerfanta\View\TwitterBootstrapView;
+use Core\RentJeeves\DataBundle\Entity\Job;
+use Doctrine\ORM\EntityManager;
+use JMS\JobQueueBundle\Entity\Repository\JobManager;
+use JMS\JobQueueBundle\View\JobFilter;
 use Sensio\Bundle\FrameworkExtraBundle\Configuration\Route;
-use Sensio\Bundle\FrameworkExtraBundle\Configuration\Template;
+use Symfony\Bundle\FrameworkBundle\Controller\Controller;
 use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
-class JobController
+class JobController extends Controller
 {
-    /** @DI\Inject("doctrine") */
-    private $registry;
-
-    /** @DI\Inject */
-    private $request;
-
-    /** @DI\Inject */
-    private $router;
-
-    /** @DI\Inject("%jms_job_queue.statistics%") */
-    private $statisticsEnabled;
-
     /**
      * @Route("/", name = "jms_jobs_overview")
-     * @Template("JMSJobQueueBundle:Job:overview.html.twig")
      */
-    public function overviewAction()
+    public function overviewAction(Request $request)
     {
-        $lastJobsWithError = $this->getRepo()->findLastJobsWithError(5);
+        $jobFilter = JobFilter::fromRequest($request);
 
         $qb = $this->getEm()->createQueryBuilder();
-        $qb->select('j')->from('RentJeeves\DataBundle\Entity\Job', 'j')
-                ->where($qb->expr()->isNull('j.originalJob'))
-                ->orderBy('j.id', 'desc');
 
+        $qb->select('j')->from('Core\RentJeeves\DataBundle\Entity\Job', 'j')
+            ->where($qb->expr()->isNull('j.originalJob'))
+            ->orderBy('j.id', 'desc');
+
+        $lastJobsWithError = $jobFilter->isDefaultPage() ? $this->getRepo()->findLastJobsWithError(5) : [];
         foreach ($lastJobsWithError as $i => $job) {
             $qb->andWhere($qb->expr()->neq('j.id', '?'.$i));
             $qb->setParameter($i, $job->getId());
         }
 
-        $pager = new Pagerfanta(new DoctrineORMAdapter($qb));
-        $pager->setCurrentPage(max(1, (integer) $this->request->query->get('page', 1)));
-        $pager->setMaxPerPage(max(5, min(50, (integer) $this->request->query->get('per_page', 20))));
+        if ( ! empty($jobFilter->command)) {
+            $qb->andWhere($qb->expr()->orX(
+                $qb->expr()->like('j.command', ':commandQuery'),
+                $qb->expr()->like('j.args', ':commandQuery')
+            ))
+                ->setParameter('commandQuery', '%'.$jobFilter->command.'%');
+        }
 
-        $pagerView = new TwitterBootstrapView();
-        $router = $this->router;
-        $routeGenerator = function($page) use ($router, $pager) {
-            return $router->generate('jms_jobs_overview', array('page' => $page, 'per_page' => $pager->getMaxPerPage()));
-        };
+        if ( ! empty($jobFilter->state)) {
+            $qb->andWhere($qb->expr()->eq('j.state', ':jobState'))
+                ->setParameter('jobState', $jobFilter->state);
+        }
 
-        return array(
+        $perPage = 50;
+
+        $query = $qb->getQuery();
+        $query->setMaxResults($perPage + 1);
+        $query->setFirstResult(($jobFilter->page - 1) * $perPage);
+
+        $jobs = $query->getResult();
+
+        return $this->render('@JMSJobQueue/Job/overview.html.twig', array(
             'jobsWithError' => $lastJobsWithError,
-            'jobPager' => $pager,
-            'jobPagerView' => $pagerView,
-            'jobPagerGenerator' => $routeGenerator,
-        );
+            'jobs' => array_slice($jobs, 0, $perPage),
+            'jobFilter' => $jobFilter,
+            'hasMore' => count($jobs) > $perPage,
+            'jobStates' => Job::getStates(),
+        ));
     }
 
     /**
      * @Route("/{id}", name = "jms_jobs_details")
-     * @Template("JMSJobQueueBundle:Job:details.html.twig")
      */
     public function detailsAction(Job $job)
     {
@@ -74,15 +74,15 @@ class JobController
             $class = ClassUtils::getClass($entity);
             $relatedEntities[] = array(
                 'class' => $class,
-                'id' => json_encode($this->registry->getManagerForClass($class)->getClassMetadata($class)->getIdentifierValues($entity)),
+                'id' => json_encode($this->get('doctrine')->getManagerForClass($class)->getClassMetadata($class)->getIdentifierValues($entity)),
                 'raw' => $entity,
             );
         }
 
         $statisticData = $statisticOptions = array();
-        if ($this->statisticsEnabled) {
+        if ($this->getParameter('jms_job_queue.statistics')) {
             $dataPerCharacteristic = array();
-            foreach ($this->registry->getManagerForClass('RentJeeves\DataBundle\Entity\Job')->getConnection()->query("SELECT * FROM jms_job_statistics WHERE job_id = ".$job->getId()) as $row) {
+            foreach ($this->get('doctrine')->getManagerForClass('Core\RentJeeves\DataBundle\Entity\Job')->getConnection()->query("SELECT * FROM jms_job_statistics WHERE job_id = ".$job->getId()) as $row) {
                 $dataPerCharacteristic[$row['characteristic']][] = array(
                     // hack because postgresql lower-cases all column names.
                     array_key_exists('createdAt', $row) ? $row['createdAt'] : $row['createdat'],
@@ -116,13 +116,13 @@ class JobController
             }
         }
 
-        return array(
+        return $this->render('@JMSJobQueue/Job/details.html.twig', array(
             'job' => $job,
             'relatedEntities' => $relatedEntities,
             'incomingDependencies' => $this->getRepo()->getIncomingDependencies($job),
             'statisticData' => $statisticData,
             'statisticOptions' => $statisticOptions,
-        );
+        ));
     }
 
     /**
@@ -146,41 +146,18 @@ class JobController
         $this->getEm()->persist($retryJob);
         $this->getEm()->flush();
 
-        $url = $this->router->generate('jms_jobs_details', array('id' => $retryJob->getId()), false);
+        $url = $this->generateUrl('jms_jobs_details', array('id' => $retryJob->getId()));
 
         return new RedirectResponse($url, 201);
     }
 
-    /**
-     * @Route("/{id}/cancel", name = "jms_jobs_cancel_job")
-     */
-    public function cancelJobAction(Job $job)
+    private function getEm(): EntityManager
     {
-        $state = $job->getState();
-
-        if (
-            Job::STATE_NEW !== $state &&
-            Job::STATE_PENDING !== $state
-        ) {
-            throw new HttpException(400, 'Given job can\'t be canceled');
-        }
-
-        $this->getRepo()->closeJob($job, Job::STATE_CANCELED);
-
-        $url = $this->router->generate('jms_jobs_details', array('id' => $job->getId()), false);
-
-        return new RedirectResponse($url, 201);
+        return $this->get('doctrine')->getManagerForClass('Core\RentJeeves\DataBundle\Entity\Job');
     }
 
-    /** @return \Doctrine\ORM\EntityManager */
-    private function getEm()
+    private function getRepo(): JobManager
     {
-        return $this->registry->getManagerForClass('RentJeeves\DataBundle\Entity\Job');
-    }
-
-    /** @return \RentJeeves\DataBundle\Entity\JobRepository */
-    private function getRepo()
-    {
-        return $this->getEm()->getRepository('RentJeeves\DataBundle\Entity\Job');
+        return $this->get('jms_job_queue.job_manager');
     }
 }

@@ -22,7 +22,7 @@ use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
 use JMS\JobQueueBundle\Exception\InvalidStateTransitionException;
 use JMS\JobQueueBundle\Exception\LogicException;
-use Symfony\Component\HttpKernel\Exception\FlattenException;
+use Symfony\Component\Debug\Exception\FlattenException;
 
 /**
  * @ORM\MappedSuperclass
@@ -151,6 +151,20 @@ abstract class Job
     public static function isNonSuccessfulFinalState($state)
     {
         return in_array($state, array(self::STATE_CANCELED, self::STATE_FAILED, self::STATE_INCOMPLETE, self::STATE_TERMINATED), true);
+    }
+
+    public static function getStates()
+    {
+        return array(
+            self::STATE_NEW,
+            self::STATE_PENDING,
+            self::STATE_CANCELED,
+            self::STATE_RUNNING,
+            self::STATE_FINISHED,
+            self::STATE_FAILED,
+            self::STATE_TERMINATED,
+            self::STATE_INCOMPLETE
+        );
     }
 
     public function __construct($command, array $args = array(), $confirmed = true, $queue = self::DEFAULT_QUEUE, $priority = self::PRIORITY_DEFAULT)
@@ -349,7 +363,9 @@ abstract class Job
 
     public function addRelatedEntity($entity)
     {
-        assert('is_object($entity)');
+        if ( ! is_object($entity)) {
+            throw new \RuntimeException(sprintf('$entity must be an object.'));
+        }
 
         if ($this->relatedEntities->contains($entity)) {
             return;
