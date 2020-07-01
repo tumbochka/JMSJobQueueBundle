@@ -68,7 +68,10 @@ class RunCommand extends Command
     /** @var array */
     private $queueOptions;
 
-    public function __construct(ManagerRegistry $managerRegistry, JobManager $jobManager, EventDispatcherInterface $dispatcher, array $queueOptionsDefault, array $queueOptions)
+    /** @var string */
+    private $consolePath;
+
+    public function __construct(ManagerRegistry $managerRegistry, JobManager $jobManager, EventDispatcherInterface $dispatcher, array $queueOptionsDefault, array $queueOptions, string $consolePath)
     {
         parent::__construct();
 
@@ -77,6 +80,7 @@ class RunCommand extends Command
         $this->dispatcher = $dispatcher;
         $this->queueOptionsDefault = $queueOptionsDefault;
         $this->queueOptions = $queueOptions;
+        $this->consolePath = $consolePath;
     }
 
     protected function configure()
@@ -433,7 +437,7 @@ class RunCommand extends Command
     {
         $args = array(
             PHP_BINARY,
-            $_SERVER['SYMFONY_CONSOLE_FILE'] ?? $_SERVER['argv'][0],
+            $this->consolePath,
             '--env='.$this->env
         );
 
