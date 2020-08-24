@@ -22,19 +22,14 @@ use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
 use JMS\JobQueueBundle\Exception\InvalidStateTransitionException;
 use JMS\JobQueueBundle\Exception\LogicException;
-use Symfony\Component\HttpKernel\Exception\FlattenException;
+use Symfony\Component\Debug\Exception\FlattenException;
 
 /**
- * @ORM\Entity(repositoryClass = "JMS\JobQueueBundle\Entity\Repository\JobRepository")
- * @ORM\Table(name = "jms_jobs", indexes = {
- *     @ORM\Index(columns = {"command"}),
- *     @ORM\Index("job_runner", columns = {"executeAfter", "state"}),
- * })
- * @ORM\ChangeTrackingPolicy("DEFERRED_EXPLICIT")
+ * @ORM\MappedSuperclass
  *
  * @author Johannes M. Schmitt <schmittjoh@gmail.com>
  */
-class Job
+abstract class Job
 {
     /** State if job is inserted, but not yet ready to be started. */
     const STATE_NEW = 'new';
@@ -75,101 +70,117 @@ class Job
      */
     const STATE_INCOMPLETE = 'incomplete';
 
-    /** @ORM\Id @ORM\GeneratedValue(strategy = "AUTO") @ORM\Column(type = "bigint", options = {"unsigned": true}) */
-    private $id;
+    /**
+     * State if an error occurs in the runner command.
+     *
+     * The runner command is the command that actually launches the individual
+     * jobs. If instead an error occurs in the job command, this will result
+     * in a state of FAILED.
+     */
+    const DEFAULT_QUEUE = 'default';
+    const MAX_QUEUE_LENGTH = 50;
 
-    /** @ORM\Column(type = "string") */
-    private $state;
+    const PRIORITY_LOW = -5;
+    const PRIORITY_DEFAULT = 0;
+    const PRIORITY_HIGH = 5;
+
+    /** @ORM\Id @ORM\GeneratedValue(strategy = "AUTO") @ORM\Column(type = "bigint", options = {"unsigned": true}) */
+    protected $id;
+
+    /** @ORM\Column(type = "string", length = 15) */
+    protected $state;
+
+    /** @ORM\Column(type = "string", length = Job::MAX_QUEUE_LENGTH) */
+    protected $queue;
+
+    /** @ORM\Column(type = "smallint") */
+    protected $priority = 0;
 
     /** @ORM\Column(type = "datetime", name="createdAt") */
-    private $createdAt;
+    protected $createdAt;
 
     /** @ORM\Column(type = "datetime", name="startedAt", nullable = true) */
-    private $startedAt;
+    protected $startedAt;
 
     /** @ORM\Column(type = "datetime", name="checkedAt", nullable = true) */
-    private $checkedAt;
+    protected $checkedAt;
+
+    /** @ORM\Column(type = "string", name="workerName", length = 50, nullable = true) */
+    protected $workerName;
 
     /** @ORM\Column(type = "datetime", name="executeAfter", nullable = true) */
-    private $executeAfter;
+    protected $executeAfter;
 
     /** @ORM\Column(type = "datetime", name="closedAt", nullable = true) */
-    private $closedAt;
+    protected $closedAt;
 
     /** @ORM\Column(type = "string") */
-    private $command;
+    protected $command;
 
     /** @ORM\Column(type = "json_array") */
-    private $args;
-
-    /**
-     * @ORM\ManyToMany(targetEntity = "Job", fetch = "EAGER")
-     * @ORM\JoinTable(name="jms_job_dependencies",
-     *     joinColumns = { @ORM\JoinColumn(name = "source_job_id", referencedColumnName = "id") },
-     *     inverseJoinColumns = { @ORM\JoinColumn(name = "dest_job_id", referencedColumnName = "id")}
-     * )
-     */
-    private $dependencies;
+    protected $args;
 
     /** @ORM\Column(type = "text", nullable = true) */
-    private $output;
+    protected $output;
 
     /** @ORM\Column(type = "text", name="errorOutput", nullable = true) */
-    private $errorOutput;
+    protected $errorOutput;
 
     /** @ORM\Column(type = "smallint", name="exitCode", nullable = true, options = {"unsigned": true}) */
-    private $exitCode;
+    protected $exitCode;
 
     /** @ORM\Column(type = "smallint", name="maxRuntime", options = {"unsigned": true}) */
-    private $maxRuntime = 0;
+    protected $maxRuntime = 0;
 
     /** @ORM\Column(type = "smallint", name="maxRetries", options = {"unsigned": true}) */
-    private $maxRetries = 0;
-
-    /**
-     * @ORM\ManyToOne(targetEntity = "Job", inversedBy = "retryJobs")
-     * @ORM\JoinColumn(name="originalJob_id", referencedColumnName="id")
-     */
-    private $originalJob;
-
-    /** @ORM\OneToMany(targetEntity = "Job", mappedBy = "originalJob", cascade = {"persist", "remove", "detach"}) */
-    private $retryJobs;
+    protected $maxRetries = 0;
 
     /** @ORM\Column(type = "jms_job_safe_object", name="stackTrace", nullable = true) */
-    private $stackTrace;
+    protected $stackTrace;
 
     /** @ORM\Column(type = "smallint", nullable = true, options = {"unsigned": true}) */
-    private $runtime;
+    protected $runtime;
 
     /** @ORM\Column(type = "integer", name="memoryUsage", nullable = true, options = {"unsigned": true}) */
-    private $memoryUsage;
+    protected $memoryUsage;
 
     /** @ORM\Column(type = "integer", name="memoryUsageReal", nullable = true, options = {"unsigned": true}) */
-    private $memoryUsageReal;
+    protected $memoryUsageReal;
 
-    /**
-     * This may store any entities which are related to this job, and are
-     * managed by Doctrine.
-     *
-     * It is effectively a many-to-any association.
-     */
-    private $relatedEntities;
-
-    public static function create($command, array $args = array(), $confirmed = true)
-    {
-        return new self($command, $args, $confirmed);
-    }
 
     public static function isNonSuccessfulFinalState($state)
     {
         return in_array($state, array(self::STATE_CANCELED, self::STATE_FAILED, self::STATE_INCOMPLETE, self::STATE_TERMINATED), true);
     }
 
-    public function __construct($command, array $args = array(), $confirmed = true)
+    public static function getStates()
     {
+        return array(
+            self::STATE_NEW,
+            self::STATE_PENDING,
+            self::STATE_CANCELED,
+            self::STATE_RUNNING,
+            self::STATE_FINISHED,
+            self::STATE_FAILED,
+            self::STATE_TERMINATED,
+            self::STATE_INCOMPLETE
+        );
+    }
+
+    public function __construct($command, array $args = array(), $confirmed = true, $queue = self::DEFAULT_QUEUE, $priority = self::PRIORITY_DEFAULT)
+    {
+        if (trim($queue) === '') {
+            throw new \InvalidArgumentException('$queue must not be empty.');
+        }
+        if (strlen($queue) > self::MAX_QUEUE_LENGTH) {
+            throw new \InvalidArgumentException(sprintf('The maximum queue length is %d, but got "%s" (%d chars).', self::MAX_QUEUE_LENGTH, $queue, strlen($queue)));
+        }
+
         $this->command = $command;
         $this->args = $args;
         $this->state = $confirmed ? self::STATE_PENDING : self::STATE_NEW;
+        $this->queue = $queue;
+        $this->priority = $priority * -1;
         $this->createdAt = new \DateTime();
         $this->executeAfter = new \DateTime();
         $this->executeAfter = $this->executeAfter->modify('-1 second');
@@ -185,6 +196,7 @@ class Job
         $this->startedAt = null;
         $this->checkedAt = null;
         $this->closedAt = null;
+        $this->workerName = null;
         $this->output = null;
         $this->errorOutput = null;
         $this->exitCode = null;
@@ -202,6 +214,26 @@ class Job
     public function getState()
     {
         return $this->state;
+    }
+
+    public function setWorkerName($workerName)
+    {
+        $this->workerName = $workerName;
+    }
+
+    public function getWorkerName()
+    {
+        return $this->workerName;
+    }
+
+    public function getPriority()
+    {
+        return $this->priority * -1;
+    }
+
+    public function isInFinalState()
+    {
+        return ! $this->isNew() && ! $this->isPending() && ! $this->isRunning();
     }
 
     public function isStartable()
@@ -331,7 +363,9 @@ class Job
 
     public function addRelatedEntity($entity)
     {
-        assert('is_object($entity)');
+        if ( ! is_object($entity)) {
+            throw new \RuntimeException(sprintf('$entity must be an object.'));
+        }
 
         if ($this->relatedEntities->contains($entity)) {
             return;
@@ -474,9 +508,11 @@ class Job
             throw new \LogicException($this.' must be in state "PENDING".');
         }
 
-        if (null === $this->originalJob) {
-            $this->originalJob = $job;
+        if (null !== $this->originalJob) {
+            throw new \LogicException($this.' already has an original job set.');
         }
+
+        $this->originalJob = $job;
     }
 
     public function addRetryJob(Job $job)
@@ -499,6 +535,19 @@ class Job
         return null !== $this->originalJob;
     }
 
+    public function isRetried()
+    {
+        foreach ($this->retryJobs as $job) {
+            /** @var Job $job */
+
+            if ( ! $job->isInFinalState()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function checked()
     {
         $this->checkedAt = new \DateTime();
@@ -517,6 +566,11 @@ class Job
     public function getStackTrace()
     {
         return $this->stackTrace;
+    }
+
+    public function getQueue()
+    {
+        return $this->queue;
     }
 
     public function isNew()
@@ -564,7 +618,7 @@ class Job
         return sprintf('Job(id = %s, command = "%s")', $this->id, $this->command);
     }
 
-    private function mightHaveStarted()
+    protected function mightHaveStarted()
     {
         if (null === $this->id) {
             return false;

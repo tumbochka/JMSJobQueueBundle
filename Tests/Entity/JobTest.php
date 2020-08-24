@@ -19,8 +19,9 @@
 namespace JMS\JobQueueBundle\Tests\Entity;
 
 use JMS\JobQueueBundle\Entity\Job;
+use PHPUnit\Framework\TestCase;
 
-class JobTest extends \PHPUnit_Framework_TestCase
+class JobTest extends TestCase
 {
     public function testConstruct()
     {
@@ -234,6 +235,14 @@ class JobTest extends \PHPUnit_Framework_TestCase
         $retry = new Job('a');
         $job->addRetryJob($retry);
         $this->assertFalse($job->isRetryAllowed());
+    }
+
+    public function testCloneDoesNotChangeQueue()
+    {
+        $job = new Job('a', array(), true, 'foo');
+        $clonedJob = clone $job;
+
+        $this->assertEquals('foo', $clonedJob->getQueue());
     }
 
     private function setField($obj, $field, $value)

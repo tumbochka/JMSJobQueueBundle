@@ -11,6 +11,8 @@ call_user_func(function() {
     require_once $autoloadFile;
 });
 
+\Doctrine\Common\Annotations\AnnotationRegistry::registerLoader('class_exists');
+
 use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\Config\Loader\LoaderInterface;
 use Symfony\Component\HttpKernel\Kernel;
@@ -21,7 +23,7 @@ class AppKernel extends Kernel
 
     public function __construct($config)
     {
-        parent::__construct('test', true);
+        parent::__construct('test', false);
 
         $fs = new Filesystem();
         if (!$fs->isAbsolutePath($config)) {
@@ -42,8 +44,6 @@ class AppKernel extends Kernel
             new \Doctrine\Bundle\DoctrineBundle\DoctrineBundle(),
             new \Doctrine\Bundle\FixturesBundle\DoctrineFixturesBundle(),
             new \Symfony\Bundle\TwigBundle\TwigBundle(),
-            new \JMS\AopBundle\JMSAopBundle(),
-            new \JMS\DiExtraBundle\JMSDiExtraBundle($this),
 
             new \JMS\JobQueueBundle\Tests\Functional\TestBundle\TestBundle(),
             new \JMS\JobQueueBundle\JMSJobQueueBundle(),

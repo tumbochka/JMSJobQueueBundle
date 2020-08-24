@@ -9,6 +9,7 @@ Features:
 
 - schedule Symfony2 console commands
 - concurrent job execution
+- multiple queues
 - dependencies between jobs
 - logging of stdout/stderr output
 - logging of exception stack trace
@@ -23,9 +24,11 @@ Documentation
 
     installation
     usage
+    scheduled_jobs
 
 - :doc:`Installation <installation>`
 - :doc:`Usage <usage>`
+- :doc:`Scheduled/Cron Jobs <scheduled_jobs>`
 
 License
 -------
