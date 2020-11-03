@@ -337,7 +337,7 @@ class JobManager
 
             case Job::STATE_FINISHED:
                 if ($job->isRetryJob()) {
-                    $job->getOriginalJob()->setState($finalState);
+                    $job->getOriginalJob()->setState($finalState, true);
                     $this->getJobManager()->persist($job->getOriginalJob());
                 }
                 $job->setState($finalState);
